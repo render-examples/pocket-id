@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+#
+# Pocket ID wrapper. This repo does not contain the app.
+# The service pulls the official image from Docker Hub at a pinned version.
+# To upgrade, bump the image tag below and push.
+# Upstream: https://github.com/pocket-id/pocket-id
+
+previews:
+  generation: off
+
+projects:
+  - name: pocket-id
+    environments:
+      - name: production
+        services:
+          - type: web
+            name: pocket-id
+            runtime: image
+            image:
+              url: docker.io/pocketid/pocket-id:v2.19.2
+            plan: starter
+            region: oregon
+            # SQLite on a disk, so one instance only.
+            numInstances: 1
+            healthCheckPath: /healthz
+            disk:
+              # SQLite database (pocket-id.db) and uploads. Default paths
+              # are relative to /app, so nothing else needs configuring.
+              name: pocket-id-data
+              mountPath: /app/data
+              sizeGB: 1
+            envVars:
+              - key: PORT
+                value: "1411"
+              # Passkeys are bound to this domain. Set your custom domain
+              # here before anyone registers a passkey.
+              - key: APP_URL
+                fromService:
+                  name: pocket-id
+                  type: web
+                  envVarKey: RENDER_EXTERNAL_URL
+              # Must be at least 16 bytes. Never change it after first boot.
+              - key: ENCRYPTION_KEY
+                generateValue: true
+              # Render's proxy sets X-Forwarded-For. Needed for real client
+              # IPs in audit logs and rate limiting.
+              - key: TRUST_PROXY
+                value: "true"
+              - key: ANALYTICS_DISABLED
+                value: "true"
