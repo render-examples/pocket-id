@@ -71,6 +71,34 @@ curl -fsS "https://<pocket-id>.onrender.com/healthz"
 > [!IMPORTANT]
 > Passkeys are bound to the domain in `APP_URL`. If you plan to use a custom domain, add it and update `APP_URL` **before** anyone registers a passkey. Passkeys made on the `onrender.com` domain stop working after the switch.
 
+## Migrating From Another Pocket ID
+
+Pocket ID's `export` and `import` commands move all users, passkeys, OIDC clients, and settings. The import replaces the whole database, so skip `/setup`.
+
+1. On the old instance, export:
+   ```bash
+   docker exec pocket-id /app/pocket-id export --path - > pocket-id-export.zip
+   ```
+   The new instance must run the same Pocket ID version as the old one, or a newer one. Check with `/app/pocket-id version`.
+2. On the `pocket-id` service's **Environment** page:
+   - Set `ENCRYPTION_KEY` to the old instance's key. The export keeps secrets encrypted with it.
+   - Set `APP_URL` to the old domain, then add that domain under **Settings → Custom Domains**. Passkeys and OIDC clients only work on the domain they were set up with.
+
+   The service may fail to start after this. Its first boot encrypted a new signing key with the generated key. The import replaces that key.
+3. Upload the export to the disk:
+   ```bash
+   ssh <service-ssh-address> 'cat > /app/data/pocket-id-export.zip' < pocket-id-export.zip
+   ```
+   SSH needs a running instance. If the service won't start, first set the **Docker Command** to `sh -c rm -f /app/data/pocket-id.db*; exec /app/docker/entrypoint.sh /app/pocket-id` and let it deploy.
+4. Set the **Docker Command** to the line below, without quotes. It imports before the server starts, so nothing holds the database lock:
+   ```
+   sh -c cd /app && /app/pocket-id import --path data/pocket-id-export.zip --yes --forcefully-acquire-lock && rm data/pocket-id-export.zip; exec /app/docker/entrypoint.sh /app/pocket-id
+   ```
+   The logs show `Import completed successfully.` before `Server listening`.
+5. Clear the **Docker Command**, then point the domain's DNS at Render.
+
+Don't run `import` over SSH while the server is running. It needs exclusive access, and `--forcefully-acquire-lock` stops the server, which also ends the SSH session partway through the import.
+
 ## Configuration
 
 | Variable | Source | Description |
