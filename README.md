@@ -12,7 +12,7 @@ A simple OpenID Connect provider that signs users in with passkeys. Add single s
 
 <p>
   <a href="https://render.com">
-    <img src="https://img.shields.io/badge/Render-Docker%20%2B%20Disk-46e3b7?logo=render&logoColor=white" alt="Render" />
+    <img src="https://img.shields.io/badge/Render-Docker%20%2B%20Postgres-46e3b7?logo=render&logoColor=white" alt="Render" />
   </a>
   <a href="https://github.com/pocket-id/pocket-id">
     <img src="https://img.shields.io/badge/Upstream-Pocket%20ID-111111?logo=github&logoColor=white" alt="Upstream" />
@@ -32,7 +32,7 @@ This repository does not contain the Pocket ID source. The service pulls the off
 | --- | --- |
 | **[Pocket ID](https://github.com/pocket-id/pocket-id)** | OIDC provider, admin UI, and passkey sign-in in one Go binary. |
 | **`pocket-id`** ([Web Service](https://render.com/docs/web-services)) | The app. |
-| **`pocket-id-data`** ([Persistent disk](https://render.com/docs/disks)) | The SQLite database and uploaded images at `/app/data`. |
+| **`pocket-id-db`** ([Render Postgres](https://render.com/docs/postgresql)) | Users, passkeys, OIDC clients, and uploaded images. |
 
 ## Architecture
 
@@ -40,20 +40,21 @@ This repository does not contain the Pocket ID source. The service pulls the off
 flowchart LR
   user["Browser"] --> app["pocket-id"]
   apps["Your apps (OIDC clients)"] --> app
-  app --> disk[("pocket-id-data")]
+  app --> db[("pocket-id-db")]
   hub["Docker Hub: pocketid/pocket-id:v2.19.2"] --> app
 ```
 
 ### How It Works
 
 1. Click **Deploy to Render**. The flow copies this repo into your GitHub account and applies [`render.yaml`](./render.yaml).
-2. Render creates the disk and generates `ENCRYPTION_KEY`. There is nothing to fill in.
-3. Pocket ID creates its SQLite database on the disk and starts.
+2. Render creates the database and generates `ENCRYPTION_KEY`. There is nothing to fill in.
+3. Pocket ID creates its tables in Postgres and starts.
 4. Open `/setup` and create the admin account with a passkey.
 
 | Resource | Type | Plan | Notes |
 | --- | --- | --- | --- |
-| `pocket-id` | Web, image | Starter | Disk at `/app/data`, 1 GB. Health: `/healthz`. Single instance. |
+| `pocket-id` | Web, image | Starter | Health: `/healthz`. Single instance. |
+| `pocket-id-db` | Postgres 16 | Basic 256 MB | Internal connections only. Also stores uploads (`FILE_BACKEND=database`). |
 
 Default region: **Oregon**.
 
@@ -73,31 +74,30 @@ curl -fsS "https://<pocket-id>.onrender.com/healthz"
 
 ## Migrating From Another Pocket ID
 
-Pocket ID's `export` and `import` commands move all users, passkeys, OIDC clients, and settings. The import replaces the whole database, so skip `/setup`.
+Pocket ID's `export` and `import` commands move all users, passkeys, OIDC clients, and settings. The import replaces the whole database, so skip `/setup`. Because the data lives in Postgres, you run the import from your old host, straight into `pocket-id-db`.
 
 1. On the old instance, export:
    ```bash
    docker exec pocket-id /app/pocket-id export --path - > pocket-id-export.zip
    ```
-   The new instance must run the same Pocket ID version as the old one, or a newer one. Check with `/app/pocket-id version`.
+   The Render instance must run the same Pocket ID version as the old one, or a newer one. Check with `/app/pocket-id version`.
 2. On the `pocket-id` service's **Environment** page:
    - Set `ENCRYPTION_KEY` to the old instance's key. The export keeps secrets encrypted with it.
    - Set `APP_URL` to the old domain, then add that domain under **Settings → Custom Domains**. Passkeys and OIDC clients only work on the domain they were set up with.
 
-   The service may fail to start after this. Its first boot encrypted a new signing key with the generated key. The import replaces that key.
-3. Upload the export to the disk:
+   The service may fail to start after this, because its first boot encrypted a new signing key with the generated key. The import replaces that key.
+3. On `pocket-id-db`, under **Info → Access Control**, allow your old host's public IP. Copy the **External Database URL**.
+4. On the old host, run the import with the same image version:
    ```bash
-   ssh <service-ssh-address> 'cat > /app/data/pocket-id-export.zip' < pocket-id-export.zip
+   docker run --rm -i \
+     -e DB_CONNECTION_STRING='<External Database URL>' \
+     -e ENCRYPTION_KEY='<old key>' \
+     -e FILE_BACKEND=database \
+     pocketid/pocket-id:v2.19.2 \
+     /app/pocket-id import --path - --yes --forcefully-acquire-lock < pocket-id-export.zip
    ```
-   SSH needs a running instance. If the service won't start, first set the **Docker Command** to `sh -c rm -f /app/data/pocket-id.db*; exec /app/docker/entrypoint.sh /app/pocket-id` and let it deploy.
-4. Set the **Docker Command** to the line below, without quotes. It imports before the server starts, so nothing holds the database lock:
-   ```
-   sh -c cd /app && /app/pocket-id import --path data/pocket-id-export.zip --yes --forcefully-acquire-lock && rm data/pocket-id-export.zip; exec /app/docker/entrypoint.sh /app/pocket-id
-   ```
-   The logs show `Import completed successfully.` before `Server listening`.
-5. Clear the **Docker Command**, then point the domain's DNS at Render.
-
-Don't run `import` over SSH while the server is running. It needs exclusive access, and `--forcefully-acquire-lock` stops the server, which also ends the SSH session partway through the import.
+   `--forcefully-acquire-lock` stops the Render instance while the import runs. Render restarts it, and it starts once the import releases the lock.
+5. Remove your IP from **Access Control**, then point the domain's DNS at Render.
 
 ## Configuration
 
@@ -105,6 +105,8 @@ Don't run `import` over SSH while the server is running. It needs exclusive acce
 | --- | --- | --- |
 | `ENCRYPTION_KEY` | Generated | Encrypts private keys and secrets in the database. Never change it. |
 | `APP_URL` | Wired | The service's `RENDER_EXTERNAL_URL`. The OIDC issuer and passkey domain. |
+| `DB_CONNECTION_STRING` | Wired | Internal URL of `pocket-id-db`. |
+| `FILE_BACKEND` | Blueprint | `database`. Stores uploaded logos and profile pictures in Postgres, so there is no disk. |
 | `TRUST_PROXY` | Blueprint | `true`. Reads client IPs from Render's proxy for audit logs and rate limiting. |
 | `PORT` | Blueprint | `1411`. |
 | `ANALYTICS_DISABLED` | Blueprint | `true`. Turns off the anonymous instance heartbeat. |
@@ -119,8 +121,8 @@ Prices from [Render's pricing page](https://render.com/pricing).
 | Resource | Approx. monthly |
 | --- | ---: |
 | `pocket-id` (Starter) | $7 |
-| 1 GB disk | $0.25 |
-| **Total** | **~$7.25** |
+| `pocket-id-db` (Basic 256 MB) | $6 |
+| **Total** | **~$13** |
 
 ## Troubleshooting
 
@@ -128,13 +130,12 @@ Prices from [Render's pricing page](https://render.com/pricing).
 | --- | --- |
 | Passkey sign-in fails after adding a custom domain | Passkeys are bound to the old domain. Users must register new passkeys on the new domain. |
 | OIDC clients reject the issuer | `APP_URL` must match the URL the clients use. Update it after you add a custom domain. |
-| Users and clients disappear after a deploy | Confirm the disk is mounted at `/app/data`. |
-| Deploy takes about a minute of downtime | Expected. A service with a disk stops the old instance before it starts the new one. |
+| First deploy fails to connect to Postgres | The service started before `pocket-id-db` accepted connections. Wait for the database to be **Available** and click **Manual Deploy**. |
 
 ## Project Structure
 
 ```
-render.yaml       Blueprint. One image-backed web service with a disk.
+render.yaml       Blueprint. One image-backed web service and Postgres.
 README.md         This file
 LICENSE           Wrapper license
 .env.example      Optional extras

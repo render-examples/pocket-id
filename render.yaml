@@ -20,18 +20,20 @@ projects:
               url: docker.io/pocketid/pocket-id:v2.19.2
             plan: starter
             region: oregon
-            # SQLite on a disk, so one instance only.
+            # Pocket ID's multi-replica mode isn't released yet.
             numInstances: 1
             healthCheckPath: /healthz
-            disk:
-              # SQLite database (pocket-id.db) and uploads. Default paths
-              # are relative to /app, so nothing else needs configuring.
-              name: pocket-id-data
-              mountPath: /app/data
-              sizeGB: 1
             envVars:
               - key: PORT
                 value: "1411"
+              - key: DB_CONNECTION_STRING
+                fromDatabase:
+                  name: pocket-id-db
+                  property: connectionString
+              # Store uploaded logos and profile pictures in Postgres too,
+              # so the service needs no disk.
+              - key: FILE_BACKEND
+                value: database
               # Passkeys are bound to this domain. Set your custom domain
               # here before anyone registers a passkey.
               - key: APP_URL
@@ -48,3 +50,12 @@ projects:
                 value: "true"
               - key: ANALYTICS_DISABLED
                 value: "true"
+
+        databases:
+          - name: pocket-id-db
+            databaseName: pocketid
+            user: pocketid
+            plan: basic-256mb
+            region: oregon
+            postgresMajorVersion: "16"
+            ipAllowList: []
