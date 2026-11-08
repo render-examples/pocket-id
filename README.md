@@ -33,6 +33,7 @@ This repository does not contain the Pocket ID source. The service pulls the off
 | **[Pocket ID](https://github.com/pocket-id/pocket-id)** | OIDC provider, admin UI, and passkey sign-in in one Go binary. |
 | **`pocket-id`** ([Web Service](https://render.com/docs/web-services)) | The app. |
 | **`pocket-id-db`** ([Render Postgres](https://render.com/docs/postgresql)) | Users, passkeys, OIDC clients, and uploaded images. |
+| **`pocket-id-data`** ([Persistent disk](https://render.com/docs/disks)) | Caches only. It makes Render stop the old instance before starting a new one, which Pocket ID requires. |
 
 ## Architecture
 
@@ -41,6 +42,7 @@ flowchart LR
   user["Browser"] --> app["pocket-id"]
   apps["Your apps (OIDC clients)"] --> app
   app --> db[("pocket-id-db")]
+  app -.->|caches| disk[("pocket-id-data")]
   hub["Docker Hub: pocketid/pocket-id:v2.19.2"] --> app
 ```
 
@@ -53,7 +55,7 @@ flowchart LR
 
 | Resource | Type | Plan | Notes |
 | --- | --- | --- | --- |
-| `pocket-id` | Web, image | Starter | Health: `/healthz`. Single instance. |
+| `pocket-id` | Web, image | Starter | Disk at `/app/data`, 1 GB. Health: `/healthz`. Single instance. |
 | `pocket-id-db` | Postgres 16 | Basic 256 MB | Internal connections only. Also stores uploads (`FILE_BACKEND=database`). |
 
 Default region: **Oregon**.
@@ -106,7 +108,7 @@ Pocket ID's `export` and `import` commands move all users, passkeys, OIDC client
 | `ENCRYPTION_KEY` | Generated | Encrypts private keys and secrets in the database. Never change it. |
 | `APP_URL` | Wired | The service's `RENDER_EXTERNAL_URL`. The OIDC issuer and passkey domain. |
 | `DB_CONNECTION_STRING` | Wired | Internal URL of `pocket-id-db`. |
-| `FILE_BACKEND` | Blueprint | `database`. Stores uploaded logos and profile pictures in Postgres, so there is no disk. |
+| `FILE_BACKEND` | Blueprint | `database`. Stores uploaded logos and profile pictures in Postgres, so database backups cover everything. |
 | `TRUST_PROXY` | Blueprint | `true`. Reads client IPs from Render's proxy for audit logs and rate limiting. |
 | `PORT` | Blueprint | `1411`. |
 | `ANALYTICS_DISABLED` | Blueprint | `true`. Turns off the anonymous instance heartbeat. |
@@ -122,7 +124,8 @@ Prices from [Render's pricing page](https://render.com/pricing).
 | --- | ---: |
 | `pocket-id` (Starter) | $7 |
 | `pocket-id-db` (Basic 256 MB) | $6 |
-| **Total** | **~$13** |
+| 1 GB disk | $0.25 |
+| **Total** | **~$13.25** |
 
 ## Troubleshooting
 
@@ -131,11 +134,13 @@ Prices from [Render's pricing page](https://render.com/pricing).
 | Passkey sign-in fails after adding a custom domain | Passkeys are bound to the old domain. Users must register new passkeys on the new domain. |
 | OIDC clients reject the issuer | `APP_URL` must match the URL the clients use. Update it after you add a custom domain. |
 | First deploy fails to connect to Postgres | The service started before `pocket-id-db` accepted connections. Wait for the database to be **Available** and click **Manual Deploy**. |
+| Deploy fails with `already one instance of Pocket ID running` | The disk is missing. Pocket ID can't overlap with the old instance during a deploy, and the disk makes Render stop the old one first. |
+| Deploy takes about a minute of downtime | Expected. A service with a disk stops the old instance before it starts the new one. |
 
 ## Project Structure
 
 ```
-render.yaml       Blueprint. One image-backed web service and Postgres.
+render.yaml       Blueprint. One image-backed web service with a disk, and Postgres.
 README.md         This file
 LICENSE           Wrapper license
 .env.example      Optional extras

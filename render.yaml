@@ -20,9 +20,17 @@ projects:
               url: docker.io/pocketid/pocket-id:v2.19.2
             plan: starter
             region: oregon
-            # Pocket ID's multi-replica mode isn't released yet.
+            # Pocket ID refuses to start while another instance is running.
             numInstances: 1
             healthCheckPath: /healthz
+            # The disk is what makes deploys work: a service with a disk stops the
+            # old instance before starting the new one. Without it, Render overlaps
+            # them and the new instance exits. All data lives in Postgres; the disk
+            # only holds caches such as the GeoLite database.
+            disk:
+              name: pocket-id-data
+              mountPath: /app/data
+              sizeGB: 1
             envVars:
               - key: PORT
                 value: "1411"
@@ -30,8 +38,8 @@ projects:
                 fromDatabase:
                   name: pocket-id-db
                   property: connectionString
-              # Store uploaded logos and profile pictures in Postgres too,
-              # so the service needs no disk.
+              # Store uploaded logos and profile pictures in Postgres too, so
+              # backups of pocket-id-db cover everything.
               - key: FILE_BACKEND
                 value: database
               # Passkeys are bound to this domain. Set your custom domain
