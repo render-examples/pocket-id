@@ -88,8 +88,9 @@ Pocket ID's `export` and `import` commands move all users, passkeys, OIDC client
    - Set `APP_URL` to the old domain, then add that domain under **Settings → Custom Domains**. Passkeys and OIDC clients only work on the domain they were set up with.
 
    The service may fail to start after this, because its first boot encrypted a new signing key with the generated key. The import replaces that key.
-3. On `pocket-id-db`, under **Info → Access Control**, allow your old host's public IP. Copy the **External Database URL**.
-4. On the old host, run the import with the same image version:
+3. **Suspend** the `pocket-id` service. If it is running, Render restarts it during the import, and the restarted server writes to the database while the import is replacing it. The import then fails with `duplicate key value violates unique constraint`.
+4. On `pocket-id-db`, under **Info → Access Control**, allow your old host's public IP. Copy the **External Database URL**.
+5. On the old host, run the import with the same image version:
    ```bash
    docker run --rm -i \
      -e DB_CONNECTION_STRING='<External Database URL>' \
@@ -98,8 +99,10 @@ Pocket ID's `export` and `import` commands move all users, passkeys, OIDC client
      pocketid/pocket-id:v2.19.2 \
      /app/pocket-id import --path - --yes --forcefully-acquire-lock < pocket-id-export.zip
    ```
-   `--forcefully-acquire-lock` stops the Render instance while the import runs. Render restarts it, and it starts once the import releases the lock.
-5. Remove your IP from **Access Control**, then point the domain's DNS at Render.
+   `--forcefully-acquire-lock` clears any lock or registration a stopped instance left behind. Each query crosses the internet, so expect a minute or two. Wait for `Import completed successfully.`
+6. **Resume** the service, remove your IP from **Access Control**, then point the domain's DNS at Render.
+
+If the import fails, keep the service suspended and run it again. The import clears the database first. A resumed service would start on the partial data and generate a new signing key.
 
 ## Configuration
 
